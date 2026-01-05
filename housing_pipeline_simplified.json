@@ -1,0 +1,309 @@
+{
+  "components": {
+    "comp-batch-inference": {
+      "executorLabel": "exec-batch-inference",
+      "inputDefinitions": {
+        "parameters": {
+          "dataset_name": {
+            "parameterType": "STRING"
+          },
+          "model_uri": {
+            "parameterType": "STRING"
+          },
+          "project_id": {
+            "parameterType": "STRING"
+          },
+          "table_name": {
+            "parameterType": "STRING"
+          }
+        }
+      }
+    },
+    "comp-setup-and-prepare-data": {
+      "executorLabel": "exec-setup-and-prepare-data",
+      "inputDefinitions": {
+        "parameters": {
+          "bucket_name": {
+            "parameterType": "STRING"
+          },
+          "dataset_name": {
+            "parameterType": "STRING"
+          },
+          "location": {
+            "parameterType": "STRING"
+          },
+          "project_id": {
+            "parameterType": "STRING"
+          },
+          "table_name": {
+            "parameterType": "STRING"
+          }
+        }
+      },
+      "outputDefinitions": {
+        "artifacts": {
+          "dataset_out": {
+            "artifactType": {
+              "schemaTitle": "system.Dataset",
+              "schemaVersion": "0.0.1"
+            }
+          }
+        }
+      }
+    },
+    "comp-train-and-register-model": {
+      "executorLabel": "exec-train-and-register-model",
+      "inputDefinitions": {
+        "artifacts": {
+          "dataset_in": {
+            "artifactType": {
+              "schemaTitle": "system.Dataset",
+              "schemaVersion": "0.0.1"
+            }
+          }
+        },
+        "parameters": {
+          "bucket_name": {
+            "parameterType": "STRING"
+          },
+          "dataset_name": {
+            "parameterType": "STRING"
+          },
+          "location": {
+            "parameterType": "STRING"
+          },
+          "model_description": {
+            "parameterType": "STRING"
+          },
+          "model_display_name": {
+            "parameterType": "STRING"
+          },
+          "project_id": {
+            "parameterType": "STRING"
+          },
+          "table_name": {
+            "parameterType": "STRING"
+          }
+        }
+      },
+      "outputDefinitions": {
+        "parameters": {
+          "Output": {
+            "parameterType": "STRING"
+          }
+        }
+      }
+    }
+  },
+  "deploymentSpec": {
+    "executors": {
+      "exec-batch-inference": {
+        "container": {
+          "args": [
+            "--executor_input",
+            "{{$}}",
+            "--function_to_execute",
+            "batch_inference"
+          ],
+          "command": [
+            "sh",
+            "-c",
+            "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location 'google-cloud-bigquery==3.11.4' 'google-cloud-storage==2.10.0' 'pandas==2.0.3' 'scikit-learn==1.3.0' 'pyarrow==12.0.1' 'db-dtypes==1.1.1' 'joblib==1.3.2'  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.15.2' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"$0\" \"$@\"\n",
+            "sh",
+            "-ec",
+            "program_path=$(mktemp -d)\n\nprintf \"%s\" \"$0\" > \"$program_path/ephemeral_component.py\"\n_KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         \"$program_path/ephemeral_component.py\"                         \"$@\"\n",
+            "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import *\n\ndef batch_inference(\n    project_id: str,\n    dataset_name: str,\n    table_name: str,\n    model_uri: str  # Simple string input instead of Model artifact\n):\n    \"\"\"Run batch inference on new/unseen data\"\"\"\n    import os\n    import sys\n    import traceback\n\n    os.environ['GOOGLE_CLOUD_PROJECT'] = project_id\n\n    print(\"=\"*70)\n    print(\"COMPONENT 3: BATCH INFERENCE\")\n    print(\"=\"*70)\n\n    try:\n        from google.cloud import bigquery, storage\n        from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error\n        import pandas as pd\n        import numpy as np\n        import joblib\n        import json\n        from datetime import datetime\n\n        print(f\"\\n[1/6] Loading model from: {model_uri}\")\n\n        # Parse GCS URI\n        gcs_path = model_uri.replace('gs://', '')\n        bucket_name = gcs_path.split('/')[0]\n        model_dir = '/'.join(gcs_path.split('/')[1:])\n\n        print(f\"  Bucket: {bucket_name}\")\n        print(f\"  Model dir: {model_dir}\")\n\n        # Download model and metadata\n        storage_client = storage.Client(project=project_id)\n        bucket = storage_client.bucket(bucket_name)\n\n        local_dir = \"/tmp/inference\"\n        os.makedirs(local_dir, exist_ok=True)\n\n        # Download metadata\n        metadata_blob = bucket.blob(f\"{model_dir}/metadata.json\")\n        metadata_path = f\"{local_dir}/metadata.json\"\n        metadata_blob.download_to_filename(metadata_path)\n\n        with open(metadata_path, 'r') as f:\n            model_metadata = json.load(f)\n\n        run_id = model_metadata['run_id']\n        feature_cols = model_metadata['feature_columns']\n        target_col = model_metadata['target_column']\n\n        print(f\"   Metadata loaded - Run ID: {run_id}\")\n\n        # Download model\n        model_blob = bucket.blob(f\"{model_dir}/model.joblib\")\n        model_path = f\"{local_dir}/model.joblib\"\n        model_blob.download_to_filename(model_path)\n\n        model = joblib.load(model_path)\n        print(f\"   Model loaded: {type(model).__name__}\")\n\n        print(\"\\n[2/6] Loading data from BigQuery...\")\n        bq_client = bigquery.Client(project=project_id)\n        table_id = f\"{project_id}.{dataset_name}.{table_name}\"\n\n        query = f\"SELECT * FROM `{table_id}` ORDER BY RAND() LIMIT 1000\"\n        df = bq_client.query(query).to_dataframe()\n        print(f\"   Loaded {len(df):,} rows\")\n\n        print(\"\\n[3/6] Preparing features...\")\n        X = df[feature_cols]\n        y_actual = df[target_col].values\n        print(f\"   Feature matrix: {X.shape}\")\n\n        print(\"\\n[4/6] Running predictions...\")\n        predictions = model.predict(X)\n        print(f\"   Generated {len(predictions):,} predictions\")\n        print(f\"    Mean: ${np.mean(predictions):.2f}\")\n        print(f\"    Range: [${np.min(predictions):.2f}, ${np.max(predictions):.2f}]\")\n\n        # Calculate metrics\n        rmse = float(np.sqrt(mean_squared_error(y_actual, predictions)))\n        r2 = float(r2_score(y_actual, predictions))\n        mae = float(mean_absolute_error(y_actual, predictions))\n\n        print(f\"\\n  Metrics: RMSE={rmse:.4f}, R\u00b2={r2:.4f}, MAE={mae:.4f}\")\n\n        print(\"\\n[5/6] Preparing results...\")\n        results_df = X.copy()\n        results_df['predicted_value'] = predictions\n        results_df['actual_value'] = y_actual\n        results_df['prediction_error'] = np.abs(predictions - y_actual)\n        results_df['model_run_id'] = run_id\n        results_df['inference_timestamp'] = datetime.now().isoformat()\n\n        print(\"\\n[6/6] Saving to BigQuery...\")\n        clean_run_id = run_id.replace('-', '_').replace(':', '_')\n        output_table = f\"{project_id}.{dataset_name}.predictions_{clean_run_id}\"\n\n        job_config = bigquery.LoadJobConfig(\n            write_disposition=\"WRITE_TRUNCATE\",\n            autodetect=True\n        )\n\n        job = bq_client.load_table_from_dataframe(results_df, output_table, job_config=job_config)\n        job.result()\n\n        print(f\"   Saved to: {output_table}\")\n        print(f\"   Rows: {len(results_df):,}\")\n\n        print(\"\\n COMPONENT 3 COMPLETE\")\n        print(\"=\"*70)\n\n    except Exception as e:\n        print(f\"\\n ERROR: {str(e)}\")\n        traceback.print_exc()\n        sys.exit(1)\n\n"
+          ],
+          "image": "gcr.io/deeplearning-platform-release/base-cpu:latest"
+        }
+      },
+      "exec-setup-and-prepare-data": {
+        "container": {
+          "args": [
+            "--executor_input",
+            "{{$}}",
+            "--function_to_execute",
+            "setup_and_prepare_data"
+          ],
+          "command": [
+            "sh",
+            "-c",
+            "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location 'google-cloud-bigquery==3.11.4' 'google-cloud-storage==2.10.0' 'pandas==2.0.3' 'scikit-learn==1.3.0' 'pyarrow==12.0.1' 'db-dtypes==1.1.1' 'kagglehub'  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.15.2' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"$0\" \"$@\"\n",
+            "sh",
+            "-ec",
+            "program_path=$(mktemp -d)\n\nprintf \"%s\" \"$0\" > \"$program_path/ephemeral_component.py\"\n_KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         \"$program_path/ephemeral_component.py\"                         \"$@\"\n",
+            "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import *\n\ndef setup_and_prepare_data(\n    project_id: str,\n    location: str,\n    bucket_name: str,\n    dataset_name: str,\n    table_name: str,\n    dataset_out: Output[Dataset]\n):\n    \"\"\"Setup GCP resources and load California housing dataset\"\"\"\n    import os\n    import sys\n    import traceback\n\n    os.environ['GOOGLE_CLOUD_PROJECT'] = project_id\n\n    print(\"=\"*70)\n    print(\"COMPONENT 1: SETUP & DATA PREPARATION\")\n    print(\"=\"*70)\n    try:\n        from google.cloud import bigquery, storage\n        from sklearn.datasets import fetch_california_housing\n        import pandas as pd\n        import json\n        import kagglehub\n        from pathlib import Path\n        import glob\n\n        def getRawData():\n            # Download latest version\n            path = kagglehub.dataset_download(\"camnugent/california-housing-prices\")\n            # Folder containing CSV files (set via env var or change here)\n            CSV_FOLDER = path\n            data_path = Path(CSV_FOLDER)\n            csv_files = list(data_path.glob('*.csv')) if data_path.exists() else []\n            if csv_files:\n                print(f\"   Found {len(csv_files)} CSV file(s) in '{data_path}'. Loading...\")\n                dfs = []\n                for p in csv_files:\n                    try:\n                        print(f\"    - Reading {p}\")\n                        dfs.append(pd.read_csv(p))\n                    except Exception as e:\n                        print(f\"    ! Failed to read {p}: {e}\")\n                if dfs:\n                    # Concatenate, allowing for differing columns\n                    df = pd.concat(dfs, ignore_index=True, sort=False)\n                    print(f\"   Loaded combined dataframe with shape: {df.shape}\")\n                else:\n                    print(\"   No valid CSVs loaded; falling back to sklearn fetch.\")\n            else:\n                print(f\"   No CSV files found in '{data_path}'.\")\n            return df\n\n        print(\"\\n[1/5] Initializing GCP clients...\")\n        bq_client = bigquery.Client(project=project_id)\n        storage_client = storage.Client(project=project_id)\n        print(\"   Clients initialized\")\n\n        print(\"\\n[2/5] Setting up BigQuery dataset...\")\n        dataset_id = f\"{project_id}.{dataset_name}\"\n        try:\n            dataset = bq_client.get_dataset(dataset_id)\n            print(f\"   Using existing dataset: {dataset_id}\")\n        except:\n            dataset = bigquery.Dataset(dataset_id)\n            dataset.location = location\n            dataset = bq_client.create_dataset(dataset, exists_ok=True)\n            print(f\"   Created dataset: {dataset_id}\")\n\n        print(\"\\n[3/5] Setting up Cloud Storage bucket...\")\n        try:\n            bucket = storage_client.get_bucket(bucket_name)\n            print(f\"   Using existing bucket: gs://{bucket_name}\")\n        except:\n            bucket = storage_client.create_bucket(bucket_name, location=location)\n            print(f\"   Created bucket: gs://{bucket_name}\")\n\n        print(\"\\n[4/5] Loading California housing dataset...\")\n        print(\"\\nSkipping...\")\n        #housing = fetch_california_housing(as_frame=True)\n        df = getRawData() #housing.frame\n        print(f\"   Loaded {len(df):,} rows with {len(df.columns)} columns\")\n\n        print(\"\\n[5/5] Uploading data to BigQuery...\")\n        table_id = f\"{project_id}.{dataset_name}.{table_name}\"\n        print(\"\\nSkipping...\")\n        #bq_client.delete_table(table_id, not_found_ok=True)\n\n        #job_config = bigquery.LoadJobConfig(write_disposition=\"WRITE_TRUNCATE\")\n        #job = bq_client.load_table_from_dataframe(df, table_id, job_config=job_config)\n        #job.result()\n\n        print(f\"   Uploaded to: {table_id}\")\n\n        metadata = {\n            \"table_id\": table_id,\n            \"num_rows\": int(len(df)),\n            \"num_features\": int(len(df.columns) - 1),\n            \"feature_columns\": [str(col) for col in df.columns[:-1]],\n            \"target_column\": str(df.columns[-1])\n        }\n\n        os.makedirs(os.path.dirname(dataset_out.path), exist_ok=True)\n        with open(dataset_out.path, 'w') as f:\n            json.dump(metadata, f, indent=2)\n\n        dataset_out.metadata.update(metadata)\n\n        print(\"\\n COMPONENT 1 COMPLETE\")\n        print(\"=\"*70)\n\n    except Exception as e:\n        print(f\"\\n ERROR: {str(e)}\")\n        traceback.print_exc()\n        sys.exit(1)\n\n"
+          ],
+          "image": "gcr.io/deeplearning-platform-release/base-cpu:latest"
+        }
+      },
+      "exec-train-and-register-model": {
+        "container": {
+          "args": [
+            "--executor_input",
+            "{{$}}",
+            "--function_to_execute",
+            "train_and_register_model"
+          ],
+          "command": [
+            "sh",
+            "-c",
+            "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location 'google-cloud-aiplatform==1.38.0' 'google-cloud-bigquery==3.11.4' 'google-cloud-storage==2.10.0' 'pandas==2.0.3' 'scikit-learn==1.3.0' 'pyarrow==12.0.1' 'db-dtypes==1.1.1' 'joblib==1.3.2'  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.15.2' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"$0\" \"$@\"\n",
+            "sh",
+            "-ec",
+            "program_path=$(mktemp -d)\n\nprintf \"%s\" \"$0\" > \"$program_path/ephemeral_component.py\"\n_KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         \"$program_path/ephemeral_component.py\"                         \"$@\"\n",
+            "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import *\n\ndef train_and_register_model(\n    project_id: str,\n    location: str,\n    dataset_name: str,\n    table_name: str,\n    bucket_name: str,\n    model_display_name: str,\n    model_description: str,\n    dataset_in: Input[Dataset]\n) -> str:  # Return model URI as string\n    \"\"\"Train model and register in Vertex AI Model Registry\"\"\"\n    import os\n    import sys\n    import traceback\n\n    os.environ['GOOGLE_CLOUD_PROJECT'] = project_id\n\n    print(\"=\"*70)\n    print(\"COMPONENT 2: MODEL TRAINING & REGISTRY\")\n    print(\"=\"*70)\n\n    try:\n        from google.cloud import aiplatform, bigquery, storage\n        from sklearn.ensemble import RandomForestRegressor\n        from sklearn.model_selection import train_test_split\n        from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error\n        import pandas as pd\n        import numpy as np\n        import joblib\n        import json\n        from datetime import datetime\n\n        print(\"\\n[1/9] Initializing Vertex AI...\")\n        aiplatform.init(project=project_id, location=location)\n        print(\"   Vertex AI initialized\")\n\n        print(\"\\n[2/9] Loading dataset metadata...\")\n        with open(dataset_in.path, 'r') as f:\n            metadata = json.load(f)\n\n        table_id = metadata['table_id']\n        feature_cols = metadata['feature_columns']\n        target_col = metadata['target_column']\n        print(f\"  Features: {len(feature_cols)}, Target: {target_col}\")\n\n        print(\"\\n[3/9] Loading data from BigQuery...\")\n        bq_client = bigquery.Client(project=project_id)\n        query = f\"SELECT * FROM `{table_id}`\"\n        df = bq_client.query(query).to_dataframe()\n        print(f\"   Loaded {len(df):,} rows\")\n\n        print(\"\\n[4/9] Preparing training data...\")\n        X = df[feature_cols]\n        y = df[target_col]\n        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)\n        print(f\"  Train: {len(X_train):,}, Test: {len(X_test):,}\")\n\n        print(\"\\n[5/9] Training Random Forest model...\")\n        model = RandomForestRegressor(\n            n_estimators=100,\n            max_depth=15,\n            min_samples_split=5,\n            min_samples_leaf=2,\n            random_state=42,\n            n_jobs=-1\n        )\n        model.fit(X_train, y_train)\n        print(\"   Training complete\")\n\n        print(\"\\n[6/9] Evaluating model...\")\n        test_pred = model.predict(X_test)\n        test_rmse = float(np.sqrt(mean_squared_error(y_test, test_pred)))\n        test_r2 = float(r2_score(y_test, test_pred))\n        print(f\"   Test RMSE: {test_rmse:.4f}, R\u00b2: {test_r2:.4f}\")\n\n        print(\"\\n[7/9] Saving model to Cloud Storage...\")\n        storage_client = storage.Client(project=project_id)\n        run_id = datetime.now().strftime('%Y%m%d_%H%M%S')\n\n        model_dir = f\"models/housing/model_{run_id}\"\n        local_dir = f\"/tmp/model_{run_id}\"\n        os.makedirs(local_dir, exist_ok=True)\n\n        # Save model\n        model_path = f\"{local_dir}/model.joblib\"\n        joblib.dump(model, model_path)\n\n        # Save metadata\n        model_metadata = {\n            \"run_id\": run_id,\n            \"feature_columns\": feature_cols,\n            \"target_column\": target_col,\n            \"test_rmse\": test_rmse,\n            \"test_r2\": test_r2\n        }\n\n        metadata_path = f\"{local_dir}/metadata.json\"\n        with open(metadata_path, 'w') as f:\n            json.dump(model_metadata, f, indent=2)\n\n        # Upload to GCS\n        bucket = storage_client.bucket(bucket_name)\n        bucket.blob(f'{model_dir}/model.joblib').upload_from_filename(model_path)\n        bucket.blob(f'{model_dir}/metadata.json').upload_from_filename(metadata_path)\n\n        model_uri = f\"gs://{bucket_name}/{model_dir}\"\n        print(f\"   Model saved to: {model_uri}\")\n\n        print(\"\\n[8/9] Registering model in Vertex AI...\")\n        try:\n            vertex_model = aiplatform.Model.upload(\n                display_name=model_display_name,\n                description=f\"{model_description} | RMSE: {test_rmse:.4f}\",\n                artifact_uri=model_uri,\n                serving_container_image_uri=\"us-docker.pkg.dev/vertex-ai/prediction/sklearn-cpu.1-0:latest\",\n                labels={\"run_id\": run_id, \"framework\": \"scikit_learn\"}\n            )\n            print(f\"   Registered: {vertex_model.resource_name}\")\n        except Exception as e:\n            print(f\"   Registry upload failed: {e}\")\n\n        print(\"\\n[9/9] Complete\")\n        print(f\"  Model URI: {model_uri}\")\n        print(\"=\"*70)\n\n        return model_uri\n\n    except Exception as e:\n        print(f\"\\n ERROR: {str(e)}\")\n        traceback.print_exc()\n        sys.exit(1)\n\n"
+          ],
+          "image": "gcr.io/deeplearning-platform-release/base-cpu:latest"
+        }
+      }
+    }
+  },
+  "pipelineInfo": {
+    "description": "Complete MLOps pipeline - Simplified version",
+    "name": "california-housing-mlops-complete"
+  },
+  "root": {
+    "dag": {
+      "tasks": {
+        "batch-inference": {
+          "cachingOptions": {
+            "enableCache": true
+          },
+          "componentRef": {
+            "name": "comp-batch-inference"
+          },
+          "dependentTasks": [
+            "train-and-register-model"
+          ],
+          "inputs": {
+            "parameters": {
+              "dataset_name": {
+                "componentInputParameter": "dataset_name"
+              },
+              "model_uri": {
+                "taskOutputParameter": {
+                  "outputParameterKey": "Output",
+                  "producerTask": "train-and-register-model"
+                }
+              },
+              "project_id": {
+                "componentInputParameter": "project_id"
+              },
+              "table_name": {
+                "componentInputParameter": "table_name"
+              }
+            }
+          },
+          "taskInfo": {
+            "name": "batch-inference"
+          }
+        },
+        "setup-and-prepare-data": {
+          "cachingOptions": {
+            "enableCache": true
+          },
+          "componentRef": {
+            "name": "comp-setup-and-prepare-data"
+          },
+          "inputs": {
+            "parameters": {
+              "bucket_name": {
+                "componentInputParameter": "bucket_name"
+              },
+              "dataset_name": {
+                "componentInputParameter": "dataset_name"
+              },
+              "location": {
+                "componentInputParameter": "location"
+              },
+              "project_id": {
+                "componentInputParameter": "project_id"
+              },
+              "table_name": {
+                "componentInputParameter": "table_name"
+              }
+            }
+          },
+          "taskInfo": {
+            "name": "setup-and-prepare-data"
+          }
+        },
+        "train-and-register-model": {
+          "cachingOptions": {
+            "enableCache": true
+          },
+          "componentRef": {
+            "name": "comp-train-and-register-model"
+          },
+          "dependentTasks": [
+            "setup-and-prepare-data"
+          ],
+          "inputs": {
+            "artifacts": {
+              "dataset_in": {
+                "taskOutputArtifact": {
+                  "outputArtifactKey": "dataset_out",
+                  "producerTask": "setup-and-prepare-data"
+                }
+              }
+            },
+            "parameters": {
+              "bucket_name": {
+                "componentInputParameter": "bucket_name"
+              },
+              "dataset_name": {
+                "componentInputParameter": "dataset_name"
+              },
+              "location": {
+                "componentInputParameter": "location"
+              },
+              "model_description": {
+                "componentInputParameter": "model_description"
+              },
+              "model_display_name": {
+                "componentInputParameter": "model_display_name"
+              },
+              "project_id": {
+                "componentInputParameter": "project_id"
+              },
+              "table_name": {
+                "componentInputParameter": "table_name"
+              }
+            }
+          },
+          "taskInfo": {
+            "name": "train-and-register-model"
+          }
+        }
+      }
+    },
+    "inputDefinitions": {
+      "parameters": {
+        "bucket_name": {
+          "parameterType": "STRING"
+        },
+        "dataset_name": {
+          "parameterType": "STRING"
+        },
+        "location": {
+          "parameterType": "STRING"
+        },
+        "model_description": {
+          "parameterType": "STRING"
+        },
+        "model_display_name": {
+          "parameterType": "STRING"
+        },
+        "project_id": {
+          "parameterType": "STRING"
+        },
+        "table_name": {
+          "parameterType": "STRING"
+        }
+      }
+    }
+  },
+  "schemaVersion": "2.1.0",
+  "sdkVersion": "kfp-2.15.2"
+}
