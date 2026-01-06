@@ -27,7 +27,11 @@ import joblib
         "pandas==2.0.3",
         "scikit-learn==1.3.0",
         "pyarrow==12.0.1",
-        "db-dtypes==1.1.1"
+        "db-dtypes==1.1.1",
+        "kagglehub",
+        "imblearn",
+        "seaborn",
+        "matplotlib"
     ]
 )
 def setup_and_prepare_data(
@@ -38,12 +42,8 @@ def setup_and_prepare_data(
     table_name: str,
     dataset_out: Output[Dataset]
 ):
-    """Setup GCP resources and load California housing dataset"""
-    print(f'Input Parameters: project_id: {project_id},\
-    location: {location},\
-    bucket_name:{bucket_name},\
-    dataset_name:{dataset_name},\
-    table_name:{table_name}')
+    """Setup GCP resources and load  dataset"""
+    print(f'Input Parameters: project_id: {project_id},\n    location: {location},\n    bucket_name:{bucket_name},\n    dataset_name:{dataset_name},\n    table_name:{table_name}')
 
     import os
     import sys
@@ -51,7 +51,6 @@ def setup_and_prepare_data(
     from google.cloud import bigquery, storage
     import pandas as pd
     import json
-    from data_preparation import prepareData # Direct import
 
     os.environ['GOOGLE_CLOUD_PROJECT'] = project_id
 
@@ -83,9 +82,21 @@ def setup_and_prepare_data(
             bucket = storage_client.create_bucket(bucket_name, location=location)
             print(f"   Created bucket: gs://{bucket_name}")
 
-        print("\n[4/5] Loading California housing dataset...")
+        print("\n[4/5] Loading dataset...")
+        # Download uci_heart_disese_data_prep.py from GCS
+        storage_client = storage.Client(project=project_id)
+        bucket = storage_client.bucket(bucket_name)
+        blob = bucket.blob("uci_heart_disese_data_prep.py") # Corrected filename
+        download_path = "./uci_heart_disese_data_prep.py" # Corrected filename
+        blob.download_to_filename(download_path)
+        print(f"   Downloaded uci_heart_disese_data_prep.py to {download_path}")
+        # Add the directory containing prepareData.py to sys.path to enable import
+        sys.path.append(os.path.dirname(download_path))
+        
+        from uci_heart_disese_data_prep import apply_feature_engineering
+        print("   Successfully imported data_preparation module.")
 
-        df = prepareData()
+        df = apply_feature_engineering()
         print(f"   Loaded {len(df):,} rows with {len(df.columns)} columns")
 
         print("\n[5/5] Uploading data to BigQuery...")
@@ -189,9 +200,10 @@ def train_and_register_model(
         df = pd.get_dummies(df, columns=['ocean_proximity'], drop_first=True)
         df = df.dropna()
 
-        X = df.drop('median_house_value', axis=1)
-        y = df['median_house_value']
-
+        #X = df.drop('median_house_value', axis=1)
+        #y = df['median_house_value']
+        X = df.iloc[:, :-1]
+        y = df.iloc[:-1]
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
         print(f"   Training data shape: {X_train.shape}, Test data shape: {X_test.shape}")
 
@@ -366,10 +378,10 @@ def deploy_model_to_endpoint(
 # ============================================================================
 
 @dsl.pipeline(
-    name="california-housing-mlops-complete", # Hardcode name for simplicity in CI/CD
+    name="heart-health-mlops-complete", # Hardcode name for simplicity in CI/CD
     description="Complete MLOps pipeline - Simplified version"
 )
-def california_housing_pipeline(
+def heart_health_pipeline(
     project_id: str,
     location: str,
     bucket_name: str,
@@ -428,10 +440,10 @@ if __name__ == "__main__":
     LOCATION = os.environ.get("LOCATION", "us-central1")
     BUCKET_NAME = os.environ.get("BUCKET_NAME", "mlops_bucket_assignment_01")
     DATASET_NAME = os.environ.get("DATASET_NAME", "mlops_datas")
-    TABLE_NAME = os.environ.get("TABLE_NAME", "california")
+    TABLE_NAME = os.environ.get("TABLE_NAME", "healthdata")
 
-    MODEL_DISPLAY_NAME = os.environ.get("MODEL_DISPLAY_NAME", "california-housing-model")
-    MODEL_DESCRIPTION = os.environ.get("MODEL_DESCRIPTION", "Random Forest model for California housing price prediction")
+    MODEL_DISPLAY_NAME = os.environ.get("MODEL_DISPLAY_NAME", "heart-health-model")
+    MODEL_DESCRIPTION = os.environ.get("MODEL_DESCRIPTION", "Random Forest model for  price prediction")
 
     # Retrieve Git metadata from environment variables
     GIT_COMMIT_SHA = os.environ.get("COMMIT_SHA", "")
@@ -439,16 +451,16 @@ if __name__ == "__main__":
     GIT_COMMIT_MESSAGE = os.environ.get("COMMIT_MESSAGE", "")
 
     PIPELINE_ROOT = f"gs://{BUCKET_NAME}/pipeline_root"
-    PIPELINE_NAME = "california-housing-mlops-complete" # Also hardcode here to match @dsl.pipeline decorator
+    PIPELINE_NAME = "heart-health-mlops-complete" # Also hardcode here to match @dsl.pipeline decorator
 
     print("\n" + "="*80)
     print("COMPILING PIPELINE")
     print("="*80)
 
-    pipeline_file = "housing_pipeline_simplified.json"
+    pipeline_file = "heart_health_pipeline_simplified.json"
 
     compiler.Compiler().compile(
-        pipeline_func=california_housing_pipeline,
+        pipeline_func=heart_health_pipeline,
         package_path=pipeline_file
     )
     print(f" Pipeline compiled: {pipeline_file}")
@@ -459,7 +471,7 @@ if __name__ == "__main__":
 
     aiplatform.init(project=PROJECT_ID, location=LOCATION, staging_bucket=PIPELINE_ROOT)
 
-    job_id = f"housing-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    job_id = f"heart-health-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
 
     job = aiplatform.PipelineJob(
         display_name=job_id,

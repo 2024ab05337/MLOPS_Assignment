@@ -31,9 +31,9 @@ substitutions:
   _LOCATION: "us-central1"
   _BUCKET_NAME: "mlops_bucket_assignment_01" # Replace with your GCS bucket name
   _DATASET_NAME: "mlops_datas"
-  _TABLE_NAME: "california"
-  _MODEL_DISPLAY_NAME: "california-housing-model"
-  _MODEL_DESCRIPTION: "Random Forest model for California housing price prediction"
+  _TABLE_NAME: "healthdata"
+  _MODEL_DISPLAY_NAME: "heart-health-model"
+  _MODEL_DESCRIPTION: "Random Forest model for heart health prediction"
   # Cloud Build automatically populates these for Git triggers
   _GIT_COMMIT_SHA: $(COMMIT_SHA)
   _GIT_COMMIT_AUTHOR: $(COMMIT_AUTHOR)
