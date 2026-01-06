@@ -27,8 +27,7 @@ import joblib
         "pandas==2.0.3",
         "scikit-learn==1.3.0",
         "pyarrow==12.0.1",
-        "db-dtypes==1.1.1",
-        "kagglehub"
+        "db-dtypes==1.1.1"
     ]
 )
 def setup_and_prepare_data(
@@ -37,7 +36,6 @@ def setup_and_prepare_data(
     bucket_name: str,
     dataset_name: str,
     table_name: str,
-    git_commit_sha: str, # New parameter for versioning
     dataset_out: Output[Dataset]
 ):
     """Setup GCP resources and load California housing dataset"""
@@ -47,8 +45,7 @@ def setup_and_prepare_data(
     from google.cloud import bigquery, storage
     import pandas as pd
     import json
-    import tempfile
-    import importlib.util
+    from data_preparation import prepareData # Direct import
 
     os.environ['GOOGLE_CLOUD_PROJECT'] = project_id
 
@@ -56,12 +53,12 @@ def setup_and_prepare_data(
     print("COMPONENT 1: SETUP & DATA PREPARATION")
     print("="*70)
     try:
-        print("\n[1/6] Initializing GCP clients...")
+        print("\n[1/5] Initializing GCP clients...")
         bq_client = bigquery.Client(project=project_id)
         storage_client = storage.Client(project=project_id)
         print("   Clients initialized")
 
-        print("\n[2/6] Setting up BigQuery dataset...")
+        print("\n[2/5] Setting up BigQuery dataset...")
         dataset_id = f"{project_id}.{dataset_name}"
         try:
             dataset = bq_client.get_dataset(dataset_id)
@@ -72,7 +69,7 @@ def setup_and_prepare_data(
             dataset = bq_client.create_dataset(dataset, exists_ok=True)
             print(f"   Created dataset: {dataset_id}")
 
-        print("\n[3/6] Setting up Cloud Storage bucket...")
+        print("\n[3/5] Setting up Cloud Storage bucket...")
         try:
             bucket = storage_client.get_bucket(bucket_name)
             print(f"   Using existing bucket: gs://{bucket_name}")
@@ -80,28 +77,12 @@ def setup_and_prepare_data(
             bucket = storage_client.create_bucket(bucket_name, location=location)
             print(f"   Created bucket: gs://{bucket_name}")
 
-        print("\n[4/6] Loading California housing dataset...")
+        print("\n[4/5] Loading California housing dataset...")
 
-        # --- Dynamic import of prepareData function ---
-        with tempfile.TemporaryDirectory() as tmpdir:
-            dependency_file_path = os.path.join(tmpdir, 'data_preparation.py')
-            gcs_bucket = storage_client.bucket(bucket_name)
-            gcs_blob = gcs_bucket.blob('pipeline_dependencies/data_preparation.py')
-            gcs_blob.download_to_filename(dependency_file_path)
-            print(f"   Downloaded data_preparation.py to {dependency_file_path}")
-
-            spec = importlib.util.spec_from_file_location("data_preparation_module", dependency_file_path)
-            data_preparation_module = importlib.util.module_from_spec(spec)
-            sys.modules["data_preparation_module"] = data_preparation_module
-            spec.loader.exec_module(data_preparation_module)
-            prepareData = data_preparation_module.prepareData
-
-            df = prepareData()
-        # --- End dynamic import ---
-
+        df = prepareData()
         print(f"   Loaded {len(df):,} rows with {len(df.columns)} columns")
 
-        print("\n[5/6] Uploading data to BigQuery...")
+        print("\n[5/5] Uploading data to BigQuery...")
         table_id = f"{project_id}.{dataset_name}.{table_name}"
         bq_client.delete_table(table_id, not_found_ok=True)
 
@@ -111,19 +92,12 @@ def setup_and_prepare_data(
 
         print(f"   Uploaded to: {table_id}")
 
-        # Save processed dataframe to GCS for versioning
-        versioned_data_path = f"data/{git_commit_sha}/processed_data.csv"
-        bucket.blob(versioned_data_path).upload_from_string(df.to_csv(index=False), 'text/csv')
-        versioned_data_uri = f"gs://{bucket_name}/{versioned_data_path}"
-        print(f"   Versioned data uploaded to GCS: {versioned_data_uri}")
-
         metadata = {
             "table_id": table_id,
             "num_rows": int(len(df)),
             "num_features": int(len(df.columns) - 1),
             "feature_columns": [str(col) for col in df.columns[:-1]],
-            "target_column": str(df.columns[-1]),
-            "gcs_data_uri": versioned_data_uri # Store GCS URI in metadata
+            "target_column": str(df.columns[-1])
         }
 
         os.makedirs(os.path.dirname(dataset_out.path), exist_ok=True)
@@ -131,7 +105,7 @@ def setup_and_prepare_data(
             json.dump(metadata, f, indent=2)
 
         dataset_out.metadata.update(metadata)
-        dataset_out.uri = versioned_data_uri # Set output artifact URI to the GCS path
+        dataset_out.uri = f"bq://{table_id}" # Set output artifact URI to the BQ table ID
 
         print("\n COMPONENT 1 COMPLETE")
         print("="*70)
@@ -397,7 +371,6 @@ def california_housing_pipeline(
     table_name: str,
     model_display_name: str,
     model_description: str,
-    git_commit_sha: str = '', # Existing pipeline parameter
     git_author: str = '',
     git_commit_message: str = ''
 ):
@@ -408,8 +381,7 @@ def california_housing_pipeline(
         location=location,
         bucket_name=bucket_name,
         dataset_name=dataset_name,
-        table_name=table_name,
-        git_commit_sha=git_commit_sha # Pass Git commit SHA to setup_and_prepare_data
+        table_name=table_name
     )
 
     train_task = train_and_register_model(
@@ -420,7 +392,7 @@ def california_housing_pipeline(
         bucket_name=bucket_name,
         model_display_name=model_display_name,
         model_description=model_description,
-        git_commit_sha=git_commit_sha,
+        git_commit_sha=GIT_COMMIT_SHA, # Still needed for model versioning
         git_author=git_author,
         git_commit_message=git_commit_message,
         dataset_in=setup_task.outputs['dataset_out']
