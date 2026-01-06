@@ -7,7 +7,7 @@ import json
 import sys
 import traceback
 import pandas as pd
-import kagglehub
+# import kagglehub # Removed as it's now handled by data_preparation.py
 from pathlib import Path
 import glob
 from sklearn.ensemble import RandomForestRegressor
@@ -47,9 +47,8 @@ def setup_and_prepare_data(
     from google.cloud import bigquery, storage
     import pandas as pd
     import json
-    import kagglehub
-    from pathlib import Path
-    import glob
+    import tempfile
+    import importlib.util
 
     os.environ['GOOGLE_CLOUD_PROJECT'] = project_id
 
@@ -57,32 +56,6 @@ def setup_and_prepare_data(
     print("COMPONENT 1: SETUP & DATA PREPARATION")
     print("="*70)
     try:
-        def getRawData():
-            # Download latest version
-            path = kagglehub.dataset_download("camnugent/california-housing-prices")
-            # Folder containing CSV files (set via env var or change here)
-            CSV_FOLDER = path
-            data_path = Path(CSV_FOLDER)
-            csv_files = list(data_path.glob('*.csv')) if data_path.exists() else []
-            if csv_files:
-                print(f"   Found {len(csv_files)} CSV file(s) in '{data_path}'. Loading...")
-                dfs = []
-                for p in csv_files:
-                    try:
-                        print(f"    - Reading {p}")
-                        dfs.append(pd.read_csv(p))
-                    except Exception as e:
-                        print(f"    ! Failed to read {p}: {e}")
-                if dfs:
-                    # Concatenate, allowing for differing columns
-                    df = pd.concat(dfs, ignore_index=True, sort=False)
-                    print(f"   Loaded combined dataframe with shape: {df.shape}")
-                else:
-                    print("   No valid CSVs loaded; falling back to sklearn fetch.")
-            else:
-                print(f"   No CSV files found in '{data_path}'.")
-            return df
-
         print("\n[1/6] Initializing GCP clients...")
         bq_client = bigquery.Client(project=project_id)
         storage_client = storage.Client(project=project_id)
@@ -108,7 +81,24 @@ def setup_and_prepare_data(
             print(f"   Created bucket: gs://{bucket_name}")
 
         print("\n[4/6] Loading California housing dataset...")
-        df = getRawData()
+
+        # --- Dynamic import of prepareData function ---
+        with tempfile.TemporaryDirectory() as tmpdir:
+            dependency_file_path = os.path.join(tmpdir, 'data_preparation.py')
+            gcs_bucket = storage_client.bucket(bucket_name)
+            gcs_blob = gcs_bucket.blob('pipeline_dependencies/data_preparation.py')
+            gcs_blob.download_to_filename(dependency_file_path)
+            print(f"   Downloaded data_preparation.py to {dependency_file_path}")
+
+            spec = importlib.util.spec_from_file_location("data_preparation_module", dependency_file_path)
+            data_preparation_module = importlib.util.module_from_spec(spec)
+            sys.modules["data_preparation_module"] = data_preparation_module
+            spec.loader.exec_module(data_preparation_module)
+            prepareData = data_preparation_module.prepareData
+
+            df = prepareData()
+        # --- End dynamic import ---
+
         print(f"   Loaded {len(df):,} rows with {len(df.columns)} columns")
 
         print("\n[5/6] Uploading data to BigQuery...")
@@ -242,7 +232,7 @@ def train_and_register_model(
         # Prepare labels and description with Git metadata
         model_labels = {
             "git_commit_sha": git_commit_sha.lower() if git_commit_sha else "unknown",
-            "git_author": git_author.lower().replace(" ", "-").replace("@", "-") if git_author else "unknown",
+            "git_author": git_author.lower().replace(" ", "-").replace("@", "-") if git_author else "unknown"
         }
 
         # Append full message to description (labels have length limits)
@@ -511,11 +501,11 @@ if __name__ == "__main__":
         enable_caching=False
     )
 
-    job.submit()
-    print(f" Submitted: {job_id}")
-    print(f"\nConsole: {job._dashboard_uri()}")
-    print("\nWaiting for completion...")
-    job.wait()
-    print("\n" + "="*80)
-    print(" PIPELINE COMPLETED!")
-    print("="*80)
+    #job.submit()
+    #print(f" Submitted: {job_id}")
+    #print(f"\nConsole: {job._dashboard_uri()}")
+    #print("\nWaiting for completion...")
+    #job.wait()
+    #print("\n" + "="*80)
+    #print(" PIPELINE COMPLETED!")
+    #print("="*80)

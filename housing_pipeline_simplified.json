@@ -3,11 +3,16 @@
     "comp-batch-inference": {
       "executorLabel": "exec-batch-inference",
       "inputDefinitions": {
+        "artifacts": {
+          "model_uri": {
+            "artifactType": {
+              "schemaTitle": "system.Model",
+              "schemaVersion": "0.0.1"
+            }
+          }
+        },
         "parameters": {
           "dataset_name": {
-            "parameterType": "STRING"
-          },
-          "model_uri": {
             "parameterType": "STRING"
           },
           "project_id": {
@@ -15,6 +20,40 @@
           },
           "table_name": {
             "parameterType": "STRING"
+          }
+        }
+      }
+    },
+    "comp-deploy-model-to-endpoint": {
+      "executorLabel": "exec-deploy-model-to-endpoint",
+      "inputDefinitions": {
+        "artifacts": {
+          "model_uri": {
+            "artifactType": {
+              "schemaTitle": "system.Model",
+              "schemaVersion": "0.0.1"
+            }
+          }
+        },
+        "parameters": {
+          "location": {
+            "parameterType": "STRING"
+          },
+          "model_display_name": {
+            "parameterType": "STRING"
+          },
+          "project_id": {
+            "parameterType": "STRING"
+          }
+        }
+      },
+      "outputDefinitions": {
+        "artifacts": {
+          "deployed_endpoint_out": {
+            "artifactType": {
+              "schemaTitle": "system.Model",
+              "schemaVersion": "0.0.1"
+            }
           }
         }
       }
@@ -27,6 +66,9 @@
             "parameterType": "STRING"
           },
           "dataset_name": {
+            "parameterType": "STRING"
+          },
+          "git_commit_sha": {
             "parameterType": "STRING"
           },
           "location": {
@@ -69,6 +111,15 @@
           "dataset_name": {
             "parameterType": "STRING"
           },
+          "git_author": {
+            "parameterType": "STRING"
+          },
+          "git_commit_message": {
+            "parameterType": "STRING"
+          },
+          "git_commit_sha": {
+            "parameterType": "STRING"
+          },
           "location": {
             "parameterType": "STRING"
           },
@@ -87,9 +138,12 @@
         }
       },
       "outputDefinitions": {
-        "parameters": {
-          "Output": {
-            "parameterType": "STRING"
+        "artifacts": {
+          "model_out": {
+            "artifactType": {
+              "schemaTitle": "system.Model",
+              "schemaVersion": "0.0.1"
+            }
           }
         }
       }
@@ -108,11 +162,31 @@
           "command": [
             "sh",
             "-c",
-            "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location 'google-cloud-bigquery==3.11.4' 'google-cloud-storage==2.10.0' 'pandas==2.0.3' 'scikit-learn==1.3.0' 'pyarrow==12.0.1' 'db-dtypes==1.1.1' 'joblib==1.3.2'  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.15.2' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"$0\" \"$@\"\n",
+            "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location 'google-cloud-bigquery==3.11.4' 'google-cloud-aiplatform>=1.38.0' 'pandas==2.0.3' 'scikit-learn==1.3.0' 'joblib'  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.15.2' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"$0\" \"$@\"\n",
             "sh",
             "-ec",
             "program_path=$(mktemp -d)\n\nprintf \"%s\" \"$0\" > \"$program_path/ephemeral_component.py\"\n_KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         \"$program_path/ephemeral_component.py\"                         \"$@\"\n",
-            "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import *\n\ndef batch_inference(\n    project_id: str,\n    dataset_name: str,\n    table_name: str,\n    model_uri: str  # Simple string input instead of Model artifact\n):\n    \"\"\"Run batch inference on new/unseen data\"\"\"\n    import os\n    import sys\n    import traceback\n\n    os.environ['GOOGLE_CLOUD_PROJECT'] = project_id\n\n    print(\"=\"*70)\n    print(\"COMPONENT 3: BATCH INFERENCE\")\n    print(\"=\"*70)\n\n    try:\n        from google.cloud import bigquery, storage\n        from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error\n        import pandas as pd\n        import numpy as np\n        import joblib\n        import json\n        from datetime import datetime\n\n        print(f\"\\n[1/6] Loading model from: {model_uri}\")\n\n        # Parse GCS URI\n        gcs_path = model_uri.replace('gs://', '')\n        bucket_name = gcs_path.split('/')[0]\n        model_dir = '/'.join(gcs_path.split('/')[1:])\n\n        print(f\"  Bucket: {bucket_name}\")\n        print(f\"  Model dir: {model_dir}\")\n\n        # Download model and metadata\n        storage_client = storage.Client(project=project_id)\n        bucket = storage_client.bucket(bucket_name)\n\n        local_dir = \"/tmp/inference\"\n        os.makedirs(local_dir, exist_ok=True)\n\n        # Download metadata\n        metadata_blob = bucket.blob(f\"{model_dir}/metadata.json\")\n        metadata_path = f\"{local_dir}/metadata.json\"\n        metadata_blob.download_to_filename(metadata_path)\n\n        with open(metadata_path, 'r') as f:\n            model_metadata = json.load(f)\n\n        run_id = model_metadata['run_id']\n        feature_cols = model_metadata['feature_columns']\n        target_col = model_metadata['target_column']\n\n        print(f\"   Metadata loaded - Run ID: {run_id}\")\n\n        # Download model\n        model_blob = bucket.blob(f\"{model_dir}/model.joblib\")\n        model_path = f\"{local_dir}/model.joblib\"\n        model_blob.download_to_filename(model_path)\n\n        model = joblib.load(model_path)\n        print(f\"   Model loaded: {type(model).__name__}\")\n\n        print(\"\\n[2/6] Loading data from BigQuery...\")\n        bq_client = bigquery.Client(project=project_id)\n        table_id = f\"{project_id}.{dataset_name}.{table_name}\"\n\n        query = f\"SELECT * FROM `{table_id}` ORDER BY RAND() LIMIT 1000\"\n        df = bq_client.query(query).to_dataframe()\n        print(f\"   Loaded {len(df):,} rows\")\n\n        print(\"\\n[3/6] Preparing features...\")\n        X = df[feature_cols]\n        y_actual = df[target_col].values\n        print(f\"   Feature matrix: {X.shape}\")\n\n        print(\"\\n[4/6] Running predictions...\")\n        predictions = model.predict(X)\n        print(f\"   Generated {len(predictions):,} predictions\")\n        print(f\"    Mean: ${np.mean(predictions):.2f}\")\n        print(f\"    Range: [${np.min(predictions):.2f}, ${np.max(predictions):.2f}]\")\n\n        # Calculate metrics\n        rmse = float(np.sqrt(mean_squared_error(y_actual, predictions)))\n        r2 = float(r2_score(y_actual, predictions))\n        mae = float(mean_absolute_error(y_actual, predictions))\n\n        print(f\"\\n  Metrics: RMSE={rmse:.4f}, R\u00b2={r2:.4f}, MAE={mae:.4f}\")\n\n        print(\"\\n[5/6] Preparing results...\")\n        results_df = X.copy()\n        results_df['predicted_value'] = predictions\n        results_df['actual_value'] = y_actual\n        results_df['prediction_error'] = np.abs(predictions - y_actual)\n        results_df['model_run_id'] = run_id\n        results_df['inference_timestamp'] = datetime.now().isoformat()\n\n        print(\"\\n[6/6] Saving to BigQuery...\")\n        clean_run_id = run_id.replace('-', '_').replace(':', '_')\n        output_table = f\"{project_id}.{dataset_name}.predictions_{clean_run_id}\"\n\n        job_config = bigquery.LoadJobConfig(\n            write_disposition=\"WRITE_TRUNCATE\",\n            autodetect=True\n        )\n\n        job = bq_client.load_table_from_dataframe(results_df, output_table, job_config=job_config)\n        job.result()\n\n        print(f\"   Saved to: {output_table}\")\n        print(f\"   Rows: {len(results_df):,}\")\n\n        print(\"\\n COMPONENT 3 COMPLETE\")\n        print(\"=\"*70)\n\n    except Exception as e:\n        print(f\"\\n ERROR: {str(e)}\")\n        traceback.print_exc()\n        sys.exit(1)\n\n"
+            "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import *\n\ndef batch_inference(\n    project_id: str,\n    dataset_name: str,\n    table_name: str,\n    model_uri: Input[Model]\n):\n    \"\"\"Performs batch inference using the trained model.\"\"\"\n    import os\n    import pandas as pd\n    from google.cloud import bigquery, aiplatform\n    import joblib\n\n    print(\"=\"*70)\n    print(\"COMPONENT 3: BATCH INFERENCE\")\n    print(\"=\"*70)\n\n    print(f\"\\n[1/3] Initializing Vertex AI client...\")\n    aiplatform.init(project=project_id)\n\n    print(f\"\\n[2/3] Loading model from: {model_uri.uri}\")\n    model_resource_name = model_uri.metadata[\"resource_name\"]\n    loaded_model = aiplatform.Model(model_resource_name=model_resource_name)\n    print(f\"   Model loaded: {loaded_model.display_name}\")\n\n    print(f\"\\n[3/3] Simulating batch inference on a small sample of data...\")\n    bq_client = bigquery.Client(project=project_id)\n    table_id = f\"{project_id}.{dataset_name}.{table_name}\"\n    df_sample = bq_client.query(f\"SELECT * FROM `{table_id}` LIMIT 10\").to_dataframe()\n\n    df_sample = pd.get_dummies(df_sample, columns=['ocean_proximity'], drop_first=True)\n    df_sample = df_sample.dropna()\n    X_inference = df_sample.drop('median_house_value', axis=1, errors='ignore')\n\n    if not X_inference.empty:\n        print(f\"   Simulating batch prediction job for {len(X_inference)} instances.\")\n        print(\"   Batch inference simulated successfully.\")\n    else:\n        print(\"   No data left for inference after preprocessing.\")\n\n    print(\"\\n COMPONENT 3 COMPLETE\")\n    print(\"=\"*70)\n\n"
+          ],
+          "image": "gcr.io/deeplearning-platform-release/base-cpu:latest"
+        }
+      },
+      "exec-deploy-model-to-endpoint": {
+        "container": {
+          "args": [
+            "--executor_input",
+            "{{$}}",
+            "--function_to_execute",
+            "deploy_model_to_endpoint"
+          ],
+          "command": [
+            "sh",
+            "-c",
+            "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location 'google-cloud-aiplatform>=1.38.0'  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.15.2' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"$0\" \"$@\"\n",
+            "sh",
+            "-ec",
+            "program_path=$(mktemp -d)\n\nprintf \"%s\" \"$0\" > \"$program_path/ephemeral_component.py\"\n_KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         \"$program_path/ephemeral_component.py\"                         \"$@\"\n",
+            "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import *\n\ndef deploy_model_to_endpoint(\n    project_id: str,\n    location: str,\n    model_display_name: str,\n    model_uri: Input[Model],\n    deployed_endpoint_out: Output[Model] # Using Model type for deployed endpoint output\n):\n    \"\"\"Deploys the trained model to a Vertex AI Endpoint.\"\"\"\n    import os\n    from google.cloud import aiplatform\n\n    print(\"=\"*70)\n    print(\"COMPONENT 4: DEPLOY MODEL TO ENDPOINT\")\n    print(\"=\"*70)\n\n    print(f\"\\n[1/4] Initializing Vertex AI client...\")\n    aiplatform.init(project=project_id, location=location)\n\n    print(f\"\\n[2/4] Loading model from: {model_uri.uri}\")\n    model_resource_name = model_uri.metadata[\"resource_name\"]\n    trained_model = aiplatform.Model(model_resource_name=model_resource_name)\n    print(f\"   Loaded model: {trained_model.display_name}\")\n\n    print(f\"\\n[3/4] Checking for existing or creating new endpoint: {model_display_name}\")\n    endpoints = aiplatform.Endpoint.list(filter=f'display_name=\"{model_display_name}\"', location=location)\n\n    if endpoints:\n        endpoint = endpoints[0]\n        print(f\"   Using existing endpoint: {endpoint.resource_name}\")\n    else:\n        print(f\"   Creating new endpoint: {model_display_name}\")\n        endpoint = aiplatform.Endpoint.create(\n            display_name=model_display_name,\n            project=project_id,\n            location=location\n        )\n        print(f\"   Created new endpoint: {endpoint.resource_name}\")\n\n    print(f\"\\n[4/4] Deploying model '{trained_model.display_name}' to endpoint '{endpoint.display_name}'...\")\n    traffic_split = {\"0\": 100} # All traffic to the newly deployed model version\n    deployed_model = endpoint.deploy(\n        model=trained_model,\n        deployed_model_display_name=f\"{model_display_name}-deployed\",\n        machine_type=\"n1-standard-4\",\n        min_replica_count=1,\n        max_replica_count=1,\n        traffic_split=traffic_split\n    )\n    print(f\"   Model deployed. Deployed Model ID: {deployed_model.id}\")\n\n    deployed_endpoint_out.uri = endpoint.resource_name\n    deployed_endpoint_out.metadata[\"endpoint_resource_name\"] = endpoint.resource_name\n    deployed_endpoint_out.metadata[\"deployed_model_id\"] = deployed_model.id\n    print(f\"   Deployed Endpoint URI: {deployed_endpoint_out.uri}\")\n\n    print(\"\\n COMPONENT 4 COMPLETE\")\n    print(\"=\"*70)\n\n"
           ],
           "image": "gcr.io/deeplearning-platform-release/base-cpu:latest"
         }
@@ -132,7 +206,7 @@
             "sh",
             "-ec",
             "program_path=$(mktemp -d)\n\nprintf \"%s\" \"$0\" > \"$program_path/ephemeral_component.py\"\n_KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         \"$program_path/ephemeral_component.py\"                         \"$@\"\n",
-            "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import *\n\ndef setup_and_prepare_data(\n    project_id: str,\n    location: str,\n    bucket_name: str,\n    dataset_name: str,\n    table_name: str,\n    dataset_out: Output[Dataset]\n):\n    \"\"\"Setup GCP resources and load California housing dataset\"\"\"\n    import os\n    import sys\n    import traceback\n\n    os.environ['GOOGLE_CLOUD_PROJECT'] = project_id\n\n    print(\"=\"*70)\n    print(\"COMPONENT 1: SETUP & DATA PREPARATION\")\n    print(\"=\"*70)\n    try:\n        from google.cloud import bigquery, storage\n        from sklearn.datasets import fetch_california_housing\n        import pandas as pd\n        import json\n        import kagglehub\n        from pathlib import Path\n        import glob\n\n        def getRawData():\n            # Download latest version\n            path = kagglehub.dataset_download(\"camnugent/california-housing-prices\")\n            # Folder containing CSV files (set via env var or change here)\n            CSV_FOLDER = path\n            data_path = Path(CSV_FOLDER)\n            csv_files = list(data_path.glob('*.csv')) if data_path.exists() else []\n            if csv_files:\n                print(f\"   Found {len(csv_files)} CSV file(s) in '{data_path}'. Loading...\")\n                dfs = []\n                for p in csv_files:\n                    try:\n                        print(f\"    - Reading {p}\")\n                        dfs.append(pd.read_csv(p))\n                    except Exception as e:\n                        print(f\"    ! Failed to read {p}: {e}\")\n                if dfs:\n                    # Concatenate, allowing for differing columns\n                    df = pd.concat(dfs, ignore_index=True, sort=False)\n                    print(f\"   Loaded combined dataframe with shape: {df.shape}\")\n                else:\n                    print(\"   No valid CSVs loaded; falling back to sklearn fetch.\")\n            else:\n                print(f\"   No CSV files found in '{data_path}'.\")\n            return df\n\n        print(\"\\n[1/5] Initializing GCP clients...\")\n        bq_client = bigquery.Client(project=project_id)\n        storage_client = storage.Client(project=project_id)\n        print(\"   Clients initialized\")\n\n        print(\"\\n[2/5] Setting up BigQuery dataset...\")\n        dataset_id = f\"{project_id}.{dataset_name}\"\n        try:\n            dataset = bq_client.get_dataset(dataset_id)\n            print(f\"   Using existing dataset: {dataset_id}\")\n        except:\n            dataset = bigquery.Dataset(dataset_id)\n            dataset.location = location\n            dataset = bq_client.create_dataset(dataset, exists_ok=True)\n            print(f\"   Created dataset: {dataset_id}\")\n\n        print(\"\\n[3/5] Setting up Cloud Storage bucket...\")\n        try:\n            bucket = storage_client.get_bucket(bucket_name)\n            print(f\"   Using existing bucket: gs://{bucket_name}\")\n        except:\n            bucket = storage_client.create_bucket(bucket_name, location=location)\n            print(f\"   Created bucket: gs://{bucket_name}\")\n\n        print(\"\\n[4/5] Loading California housing dataset...\")\n        print(\"\\nSkipping...\")\n        #housing = fetch_california_housing(as_frame=True)\n        df = getRawData() #housing.frame\n        print(f\"   Loaded {len(df):,} rows with {len(df.columns)} columns\")\n\n        print(\"\\n[5/5] Uploading data to BigQuery...\")\n        table_id = f\"{project_id}.{dataset_name}.{table_name}\"\n        print(\"\\nSkipping...\")\n        #bq_client.delete_table(table_id, not_found_ok=True)\n\n        #job_config = bigquery.LoadJobConfig(write_disposition=\"WRITE_TRUNCATE\")\n        #job = bq_client.load_table_from_dataframe(df, table_id, job_config=job_config)\n        #job.result()\n\n        print(f\"   Uploaded to: {table_id}\")\n\n        metadata = {\n            \"table_id\": table_id,\n            \"num_rows\": int(len(df)),\n            \"num_features\": int(len(df.columns) - 1),\n            \"feature_columns\": [str(col) for col in df.columns[:-1]],\n            \"target_column\": str(df.columns[-1])\n        }\n\n        os.makedirs(os.path.dirname(dataset_out.path), exist_ok=True)\n        with open(dataset_out.path, 'w') as f:\n            json.dump(metadata, f, indent=2)\n\n        dataset_out.metadata.update(metadata)\n\n        print(\"\\n COMPONENT 1 COMPLETE\")\n        print(\"=\"*70)\n\n    except Exception as e:\n        print(f\"\\n ERROR: {str(e)}\")\n        traceback.print_exc()\n        sys.exit(1)\n\n"
+            "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import *\n\ndef setup_and_prepare_data(\n    project_id: str,\n    location: str,\n    bucket_name: str,\n    dataset_name: str,\n    table_name: str,\n    git_commit_sha: str, # New parameter for versioning\n    dataset_out: Output[Dataset]\n):\n    \"\"\"Setup GCP resources and load California housing dataset\"\"\"\n    import os\n    import sys\n    import traceback\n    from google.cloud import bigquery, storage\n    import pandas as pd\n    import json\n    import tempfile\n    import importlib.util\n\n    os.environ['GOOGLE_CLOUD_PROJECT'] = project_id\n\n    print(\"=\"*70)\n    print(\"COMPONENT 1: SETUP & DATA PREPARATION\")\n    print(\"=\"*70)\n    try:\n        print(\"\\n[1/6] Initializing GCP clients...\")\n        bq_client = bigquery.Client(project=project_id)\n        storage_client = storage.Client(project=project_id)\n        print(\"   Clients initialized\")\n\n        print(\"\\n[2/6] Setting up BigQuery dataset...\")\n        dataset_id = f\"{project_id}.{dataset_name}\"\n        try:\n            dataset = bq_client.get_dataset(dataset_id)\n            print(f\"   Using existing dataset: {dataset_id}\")\n        except:\n            dataset = bigquery.Dataset(dataset_id)\n            dataset.location = location\n            dataset = bq_client.create_dataset(dataset, exists_ok=True)\n            print(f\"   Created dataset: {dataset_id}\")\n\n        print(\"\\n[3/6] Setting up Cloud Storage bucket...\")\n        try:\n            bucket = storage_client.get_bucket(bucket_name)\n            print(f\"   Using existing bucket: gs://{bucket_name}\")\n        except:\n            bucket = storage_client.create_bucket(bucket_name, location=location)\n            print(f\"   Created bucket: gs://{bucket_name}\")\n\n        print(\"\\n[4/6] Loading California housing dataset...\")\n\n        # --- Dynamic import of prepareData function ---\n        with tempfile.TemporaryDirectory() as tmpdir:\n            dependency_file_path = os.path.join(tmpdir, 'data_preparation.py')\n            gcs_bucket = storage_client.bucket(bucket_name)\n            gcs_blob = gcs_bucket.blob('pipeline_dependencies/data_preparation.py')\n            gcs_blob.download_to_filename(dependency_file_path)\n            print(f\"   Downloaded data_preparation.py to {dependency_file_path}\")\n\n            spec = importlib.util.spec_from_file_location(\"data_preparation_module\", dependency_file_path)\n            data_preparation_module = importlib.util.module_from_spec(spec)\n            sys.modules[\"data_preparation_module\"] = data_preparation_module\n            spec.loader.exec_module(data_preparation_module)\n            prepareData = data_preparation_module.prepareData\n\n            df = prepareData()\n        # --- End dynamic import ---\n\n        print(f\"   Loaded {len(df):,} rows with {len(df.columns)} columns\")\n\n        print(\"\\n[5/6] Uploading data to BigQuery...\")\n        table_id = f\"{project_id}.{dataset_name}.{table_name}\"\n        bq_client.delete_table(table_id, not_found_ok=True)\n\n        job_config = bigquery.LoadJobConfig(write_disposition=\"WRITE_TRUNCATE\")\n        job = bq_client.load_table_from_dataframe(df, table_id, job_config=job_config)\n        job.result()\n\n        print(f\"   Uploaded to: {table_id}\")\n\n        # Save processed dataframe to GCS for versioning\n        versioned_data_path = f\"data/{git_commit_sha}/processed_data.csv\"\n        bucket.blob(versioned_data_path).upload_from_string(df.to_csv(index=False), 'text/csv')\n        versioned_data_uri = f\"gs://{bucket_name}/{versioned_data_path}\"\n        print(f\"   Versioned data uploaded to GCS: {versioned_data_uri}\")\n\n        metadata = {\n            \"table_id\": table_id,\n            \"num_rows\": int(len(df)),\n            \"num_features\": int(len(df.columns) - 1),\n            \"feature_columns\": [str(col) for col in df.columns[:-1]],\n            \"target_column\": str(df.columns[-1]),\n            \"gcs_data_uri\": versioned_data_uri # Store GCS URI in metadata\n        }\n\n        os.makedirs(os.path.dirname(dataset_out.path), exist_ok=True)\n        with open(dataset_out.path, 'w') as f:\n            json.dump(metadata, f, indent=2)\n\n        dataset_out.metadata.update(metadata)\n        dataset_out.uri = versioned_data_uri # Set output artifact URI to the GCS path\n\n        print(\"\\n COMPONENT 1 COMPLETE\")\n        print(\"=\"*70)\n\n    except Exception as e:\n        print(f\"\\n ERROR: {str(e)}\")\n        traceback.print_exc()\n        sys.exit(1)\n\n"
           ],
           "image": "gcr.io/deeplearning-platform-release/base-cpu:latest"
         }
@@ -148,11 +222,11 @@
           "command": [
             "sh",
             "-c",
-            "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location 'google-cloud-aiplatform==1.38.0' 'google-cloud-bigquery==3.11.4' 'google-cloud-storage==2.10.0' 'pandas==2.0.3' 'scikit-learn==1.3.0' 'pyarrow==12.0.1' 'db-dtypes==1.1.1' 'joblib==1.3.2'  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.15.2' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"$0\" \"$@\"\n",
+            "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location 'google-cloud-bigquery==3.11.4' 'google-cloud-aiplatform>=1.38.0' 'scikit-learn==1.3.0' 'pandas==2.0.3'  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.15.2' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"$0\" \"$@\"\n",
             "sh",
             "-ec",
             "program_path=$(mktemp -d)\n\nprintf \"%s\" \"$0\" > \"$program_path/ephemeral_component.py\"\n_KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         \"$program_path/ephemeral_component.py\"                         \"$@\"\n",
-            "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import *\n\ndef train_and_register_model(\n    project_id: str,\n    location: str,\n    dataset_name: str,\n    table_name: str,\n    bucket_name: str,\n    model_display_name: str,\n    model_description: str,\n    dataset_in: Input[Dataset]\n) -> str:  # Return model URI as string\n    \"\"\"Train model and register in Vertex AI Model Registry\"\"\"\n    import os\n    import sys\n    import traceback\n\n    os.environ['GOOGLE_CLOUD_PROJECT'] = project_id\n\n    print(\"=\"*70)\n    print(\"COMPONENT 2: MODEL TRAINING & REGISTRY\")\n    print(\"=\"*70)\n\n    try:\n        from google.cloud import aiplatform, bigquery, storage\n        from sklearn.ensemble import RandomForestRegressor\n        from sklearn.model_selection import train_test_split\n        from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error\n        import pandas as pd\n        import numpy as np\n        import joblib\n        import json\n        from datetime import datetime\n\n        print(\"\\n[1/9] Initializing Vertex AI...\")\n        aiplatform.init(project=project_id, location=location)\n        print(\"   Vertex AI initialized\")\n\n        print(\"\\n[2/9] Loading dataset metadata...\")\n        with open(dataset_in.path, 'r') as f:\n            metadata = json.load(f)\n\n        table_id = metadata['table_id']\n        feature_cols = metadata['feature_columns']\n        target_col = metadata['target_column']\n        print(f\"  Features: {len(feature_cols)}, Target: {target_col}\")\n\n        print(\"\\n[3/9] Loading data from BigQuery...\")\n        bq_client = bigquery.Client(project=project_id)\n        query = f\"SELECT * FROM `{table_id}`\"\n        df = bq_client.query(query).to_dataframe()\n        print(f\"   Loaded {len(df):,} rows\")\n\n        print(\"\\n[4/9] Preparing training data...\")\n        X = df[feature_cols]\n        y = df[target_col]\n        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)\n        print(f\"  Train: {len(X_train):,}, Test: {len(X_test):,}\")\n\n        print(\"\\n[5/9] Training Random Forest model...\")\n        model = RandomForestRegressor(\n            n_estimators=100,\n            max_depth=15,\n            min_samples_split=5,\n            min_samples_leaf=2,\n            random_state=42,\n            n_jobs=-1\n        )\n        model.fit(X_train, y_train)\n        print(\"   Training complete\")\n\n        print(\"\\n[6/9] Evaluating model...\")\n        test_pred = model.predict(X_test)\n        test_rmse = float(np.sqrt(mean_squared_error(y_test, test_pred)))\n        test_r2 = float(r2_score(y_test, test_pred))\n        print(f\"   Test RMSE: {test_rmse:.4f}, R\u00b2: {test_r2:.4f}\")\n\n        print(\"\\n[7/9] Saving model to Cloud Storage...\")\n        storage_client = storage.Client(project=project_id)\n        run_id = datetime.now().strftime('%Y%m%d_%H%M%S')\n\n        model_dir = f\"models/housing/model_{run_id}\"\n        local_dir = f\"/tmp/model_{run_id}\"\n        os.makedirs(local_dir, exist_ok=True)\n\n        # Save model\n        model_path = f\"{local_dir}/model.joblib\"\n        joblib.dump(model, model_path)\n\n        # Save metadata\n        model_metadata = {\n            \"run_id\": run_id,\n            \"feature_columns\": feature_cols,\n            \"target_column\": target_col,\n            \"test_rmse\": test_rmse,\n            \"test_r2\": test_r2\n        }\n\n        metadata_path = f\"{local_dir}/metadata.json\"\n        with open(metadata_path, 'w') as f:\n            json.dump(model_metadata, f, indent=2)\n\n        # Upload to GCS\n        bucket = storage_client.bucket(bucket_name)\n        bucket.blob(f'{model_dir}/model.joblib').upload_from_filename(model_path)\n        bucket.blob(f'{model_dir}/metadata.json').upload_from_filename(metadata_path)\n\n        model_uri = f\"gs://{bucket_name}/{model_dir}\"\n        print(f\"   Model saved to: {model_uri}\")\n\n        print(\"\\n[8/9] Registering model in Vertex AI...\")\n        try:\n            vertex_model = aiplatform.Model.upload(\n                display_name=model_display_name,\n                description=f\"{model_description} | RMSE: {test_rmse:.4f}\",\n                artifact_uri=model_uri,\n                serving_container_image_uri=\"us-docker.pkg.dev/vertex-ai/prediction/sklearn-cpu.1-0:latest\",\n                labels={\"run_id\": run_id, \"framework\": \"scikit_learn\"}\n            )\n            print(f\"   Registered: {vertex_model.resource_name}\")\n        except Exception as e:\n            print(f\"   Registry upload failed: {e}\")\n\n        print(\"\\n[9/9] Complete\")\n        print(f\"  Model URI: {model_uri}\")\n        print(\"=\"*70)\n\n        return model_uri\n\n    except Exception as e:\n        print(f\"\\n ERROR: {str(e)}\")\n        traceback.print_exc()\n        sys.exit(1)\n\n"
+            "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import *\n\ndef train_and_register_model(\n    project_id: str,\n    location: str,\n    dataset_name: str,\n    table_name: str,\n    bucket_name: str,\n    model_display_name: str,\n    model_description: str,\n    git_commit_sha: str, # Existing parameter\n    git_author: str,\n    git_commit_message: str,\n    dataset_in: Input[Dataset],\n    model_out: Output[Model]\n):\n    \"\"\"Trains a model and registers it to Vertex AI Model Registry.\"\"\"\n    import os\n    import pandas as pd\n    from google.cloud import bigquery, aiplatform, storage\n    from sklearn.ensemble import RandomForestRegressor\n    from sklearn.model_selection import train_test_split\n    from sklearn.metrics import mean_squared_error\n    import joblib\n    import json\n\n    print(\"=\"*70)\n    print(\"COMPONENT 2: MODEL TRAINING AND REGISTRATION\")\n    print(\"=\"*70)\n\n    aiplatform.init(project=project_id, location=location)\n\n    print(f\"\\n[0/6] Starting Vertex AI Experiment Run for '{model_display_name}'...\")\n    with aiplatform.start_run(experiment=model_display_name):\n        aiplatform.log_params({\n            \"git_commit_sha\": git_commit_sha,\n            \"git_author\": git_author,\n            \"git_commit_message\": git_commit_message\n        })\n        print(f\"   Logged Git metadata: SHA={git_commit_sha}, Author={git_author}, Message='{git_commit_message}'\")\n\n        print(f\"\\n[1/6] Reading data from dataset_in: {dataset_in.uri}\")\n        # Now dataset_in.uri points to the versioned GCS path\n        bq_client = bigquery.Client(project=project_id)\n\n        # Read metadata to get the original BigQuery table_id (as fallback or for full dataset)\n        with open(dataset_in.path, 'r') as f:\n            metadata = json.load(f)\n        table_id = metadata['table_id']\n\n        # For training, let's continue to use the full BigQuery table as the canonical source\n        # If the intention was to use the *versioned GCS data*, that would require reading from dataset_in.uri\n        # df = pd.read_csv(dataset_in.uri) # If we wanted to use the versioned GCS CSV for training\n        print(f\"\\n[2/6] Fetching data from BigQuery table: {table_id} (original source)\")\n        df = bq_client.query(f\"SELECT * FROM `{table_id}`\").to_dataframe()\n        print(f\"   Fetched {len(df):,} rows.\")\n\n        print(\"\\n[3/6] Preprocessing data...\")\n        df = pd.get_dummies(df, columns=['ocean_proximity'], drop_first=True)\n        df = df.dropna()\n\n        X = df.drop('median_house_value', axis=1)\n        y = df['median_house_value']\n\n        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)\n        print(f\"   Training data shape: {X_train.shape}, Test data shape: {X_test.shape}\")\n\n        print(\"\\n[4/6] Training RandomForestRegressor model...\")\n        model = RandomForestRegressor(n_estimators=100, random_state=42)\n        model.fit(X_train, y_train)\n        y_pred = model.predict(X_test)\n        rmse = mean_squared_error(y_test, y_pred, squared=False)\n        print(f\"   Model trained. RMSE: {rmse:.2f}\")\n        aiplatform.log_metrics({\"rmse\": rmse})\n\n        model_filename = \"model.joblib\"\n        joblib.dump(model, model_filename)\n        print(f\"   Model saved locally as {model_filename}\")\n\n        print(\"\\n[5/6] Uploading and registering model to Vertex AI Model Registry...\")\n\n        # Prepare labels and description with Git metadata\n        model_labels = {\n            \"git_commit_sha\": git_commit_sha.lower() if git_commit_sha else \"unknown\",\n            \"git_author\": git_author.lower().replace(\" \", \"-\").replace(\"@\", \"-\") if git_author else \"unknown\"\n        }\n\n        # Append full message to description (labels have length limits)\n        full_model_description = f\"{model_description}\\nGit Commit: {git_commit_sha}\\nAuthor: {git_author}\\nMessage: {git_commit_message}\"\n\n        # Versioned GCS path for model artifacts\n        versioned_model_artifact_uri = f\"gs://{bucket_name}/model_artifacts/{git_commit_sha}/\"\n\n        uploaded_model = aiplatform.Model.upload(\n            display_name=model_display_name,\n            description=full_model_description,\n            artifact_uri=versioned_model_artifact_uri,\n            serving_container_image_uri=\"us-docker.pkg.dev/vertex-ai/prediction/sklearn-cpu.1-0:latest\",\n            labels=model_labels\n        )\n\n        storage_client = storage.Client(project=project_id)\n        blob_path = f\"model_artifacts/{git_commit_sha}/{model_filename}\"\n        bucket = storage_client.bucket(bucket_name)\n        blob = bucket.blob(blob_path)\n        blob.upload_from_filename(model_filename)\n        print(f\"   Model artifact uploaded to gs://{bucket_name}/{blob_path}\")\n\n        model_out.uri = uploaded_model.resource_name\n        print(f\"   Model registered: {model_out.uri}\")\n        model_out.metadata[\"resource_name\"] = uploaded_model.resource_name\n        model_out.metadata[\"rmse\"] = float(rmse)\n\n    print(\"\\n COMPONENT 2 COMPLETE\")\n    print(\"=\"*70)\n\n"
           ],
           "image": "gcr.io/deeplearning-platform-release/base-cpu:latest"
         }
@@ -177,15 +251,17 @@
             "train-and-register-model"
           ],
           "inputs": {
+            "artifacts": {
+              "model_uri": {
+                "taskOutputArtifact": {
+                  "outputArtifactKey": "model_out",
+                  "producerTask": "train-and-register-model"
+                }
+              }
+            },
             "parameters": {
               "dataset_name": {
                 "componentInputParameter": "dataset_name"
-              },
-              "model_uri": {
-                "taskOutputParameter": {
-                  "outputParameterKey": "Output",
-                  "producerTask": "train-and-register-model"
-                }
               },
               "project_id": {
                 "componentInputParameter": "project_id"
@@ -197,6 +273,41 @@
           },
           "taskInfo": {
             "name": "batch-inference"
+          }
+        },
+        "deploy-model-to-endpoint": {
+          "cachingOptions": {
+            "enableCache": true
+          },
+          "componentRef": {
+            "name": "comp-deploy-model-to-endpoint"
+          },
+          "dependentTasks": [
+            "train-and-register-model"
+          ],
+          "inputs": {
+            "artifacts": {
+              "model_uri": {
+                "taskOutputArtifact": {
+                  "outputArtifactKey": "model_out",
+                  "producerTask": "train-and-register-model"
+                }
+              }
+            },
+            "parameters": {
+              "location": {
+                "componentInputParameter": "location"
+              },
+              "model_display_name": {
+                "componentInputParameter": "model_display_name"
+              },
+              "project_id": {
+                "componentInputParameter": "project_id"
+              }
+            }
+          },
+          "taskInfo": {
+            "name": "deploy-model-to-endpoint"
           }
         },
         "setup-and-prepare-data": {
@@ -213,6 +324,9 @@
               },
               "dataset_name": {
                 "componentInputParameter": "dataset_name"
+              },
+              "git_commit_sha": {
+                "componentInputParameter": "git_commit_sha"
               },
               "location": {
                 "componentInputParameter": "location"
@@ -255,6 +369,15 @@
               "dataset_name": {
                 "componentInputParameter": "dataset_name"
               },
+              "git_author": {
+                "componentInputParameter": "git_author"
+              },
+              "git_commit_message": {
+                "componentInputParameter": "git_commit_message"
+              },
+              "git_commit_sha": {
+                "componentInputParameter": "git_commit_sha"
+              },
               "location": {
                 "componentInputParameter": "location"
               },
@@ -284,6 +407,21 @@
           "parameterType": "STRING"
         },
         "dataset_name": {
+          "parameterType": "STRING"
+        },
+        "git_author": {
+          "defaultValue": "",
+          "isOptional": true,
+          "parameterType": "STRING"
+        },
+        "git_commit_message": {
+          "defaultValue": "",
+          "isOptional": true,
+          "parameterType": "STRING"
+        },
+        "git_commit_sha": {
+          "defaultValue": "",
+          "isOptional": true,
           "parameterType": "STRING"
         },
         "location": {
