@@ -39,6 +39,12 @@ def setup_and_prepare_data(
     dataset_out: Output[Dataset]
 ):
     """Setup GCP resources and load California housing dataset"""
+    print(f'Input Parameters: project_id: {project_id},\
+    location: {location},\
+    bucket_name:{bucket_name},\
+    dataset_name:{dataset_name},\
+    table_name:{table_name}')
+
     import os
     import sys
     import traceback
