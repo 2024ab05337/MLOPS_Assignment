@@ -18,9 +18,9 @@ steps:
       - 'TABLE_NAME=${_TABLE_NAME}'
       - 'MODEL_DISPLAY_NAME=${_MODEL_DISPLAY_NAME}'
       - 'MODEL_DESCRIPTION=${_MODEL_DESCRIPTION}'
-      - 'COMMIT_SHA=${_COMMIT_SHA}' # Pass Git commit SHA
-      - 'COMMIT_AUTHOR=${_COMMIT_AUTHOR}' # Pass Git commit author
-      - 'COMMIT_MESSAGE=${_COMMIT_MESSAGE}' # Pass Git commit message
+      - 'GIT_COMMIT_SHA=${_GIT_COMMIT_SHA}' # Pass Git commit SHA
+      - 'GIT_AUTHOR=${_GIT_COMMIT_AUTHOR}' # Pass Git commit author
+      - 'GIT_COMMIT_MESSAGE=${_GIT_COMMIT_MESSAGE}' # Pass Git commit message
     id: 'run-pipeline-runner'
 
 options:
@@ -35,6 +35,6 @@ substitutions:
   _MODEL_DISPLAY_NAME: "california-housing-model"
   _MODEL_DESCRIPTION: "Random Forest model for California housing price prediction"
   # Cloud Build automatically populates these for Git triggers
-  _COMMIT_SHA: $(COMMIT_SHA)
-  _COMMIT_AUTHOR: $(COMMIT_AUTHOR)
-  _COMMIT_MESSAGE: $(COMMIT_MESSAGE)
+  _GIT_COMMIT_SHA: $(COMMIT_SHA)
+  _GIT_COMMIT_AUTHOR: $(COMMIT_AUTHOR)
+  _GIT_COMMIT_MESSAGE: $(COMMIT_MESSAGE)
