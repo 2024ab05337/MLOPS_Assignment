@@ -1,0 +1,40 @@
+steps:
+  # Install dependencies
+  - name: 'python'
+    entrypoint: 'pip'
+    args: ['install', '--user', 'kfp>=2.4.0', 'google-cloud-aiplatform>=1.38.0', 'google-cloud-bigquery>=3.11.4', 'google-cloud-storage>=2.10.0', 'pandas>=2.0.3', 'scikit-learn>=1.3.0', 'pyarrow>=12.0.1', 'db-dtypes>=1.1.1', 'kagglehub']
+    id: 'install-deps'
+
+  # Run the pipeline_runner.py script to compile and submit the pipeline
+  - name: 'python'
+    entrypoint: 'python'
+    args: ['pipeline_runner.py']
+    env:
+      # Pass necessary environment variables to the script
+      - 'PROJECT_ID=${_PROJECT_ID}'
+      - 'LOCATION=${_LOCATION}'
+      - 'BUCKET_NAME=${_BUCKET_NAME}'
+      - 'DATASET_NAME=${_DATASET_NAME}'
+      - 'TABLE_NAME=${_TABLE_NAME}'
+      - 'MODEL_DISPLAY_NAME=${_MODEL_DISPLAY_NAME}'
+      - 'MODEL_DESCRIPTION=${_MODEL_DESCRIPTION}'
+      - 'COMMIT_SHA=${_COMMIT_SHA}' # Pass Git commit SHA
+      - 'COMMIT_AUTHOR=${_COMMIT_AUTHOR}' # Pass Git commit author
+      - 'COMMIT_MESSAGE=${_COMMIT_MESSAGE}' # Pass Git commit message
+    id: 'run-pipeline-runner'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+substitutions:
+  _PROJECT_ID: "bits-mlops-assignment1"  # Replace with your GCP project ID
+  _LOCATION: "us-central1"
+  _BUCKET_NAME: "mlops_bucket_assignment_01" # Replace with your GCS bucket name
+  _DATASET_NAME: "mlops_datas"
+  _TABLE_NAME: "california"
+  _MODEL_DISPLAY_NAME: "california-housing-model"
+  _MODEL_DESCRIPTION: "Random Forest model for California housing price prediction"
+  # Cloud Build automatically populates these for Git triggers
+  _COMMIT_SHA: $(COMMIT_SHA)
+  _COMMIT_AUTHOR: $(COMMIT_AUTHOR)
+  _COMMIT_MESSAGE: $(COMMIT_MESSAGE)
