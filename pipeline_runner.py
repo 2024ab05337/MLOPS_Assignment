@@ -371,6 +371,7 @@ def california_housing_pipeline(
     table_name: str,
     model_display_name: str,
     model_description: str,
+    git_commit_sha: str = '', # Existing pipeline parameter
     git_author: str = '',
     git_commit_message: str = ''
 ):
@@ -392,7 +393,7 @@ def california_housing_pipeline(
         bucket_name=bucket_name,
         model_display_name=model_display_name,
         model_description=model_description,
-        git_commit_sha=GIT_COMMIT_SHA, # Still needed for model versioning
+        git_commit_sha=git_commit_sha, # Still needed for model versioning
         git_author=git_author,
         git_commit_message=git_commit_message,
         dataset_in=setup_task.outputs['dataset_out']
